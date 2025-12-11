@@ -120,7 +120,12 @@ function simulate(simulator, u0, grid_price, battery_charge, swap_battery_idx, s
 
 
     prob = remake(simulator.prob, u0=copy(u0[k, :]), p=battery_charge[k])
-    sol = DifferentialEquations.solve(prob, IDA(), verbose=false, callback=cb, adaptive=false)
+    sol = DifferentialEquations.solve(prob, IDA(), 
+        initializealg = DiffEqBase.BrownFullBasicInit(), 
+        verbose = false, 
+        callback = cb, 
+        adaptive = false
+    )
     csn_avg = (sol[end])[Ncp+1]
     soc_end = csn_avg / csnmax
     u1[k, :] .= sol[end]

@@ -5,19 +5,19 @@ using DataFrames
 using JLD
 
 include("utils.jl")
-include("../GP_Model/Kriging.jl")
+include("D:/vscode codes/BSS_MPC_deterministic-main/GP_Model/Kriging.jl")
 
 
 #=
 A. Data
 =#
-Price_File = "../data/rtm_cal.csv"
-Demand_File = "../data/长泰国际金融大厦.xlsx"
+Price_File = "D:/vscode codes/BSS_MPC_deterministic-main/data/rtm_cal.csv"
+Demand_File = "D:/vscode codes/BSS_MPC_deterministic-main/data/长泰国际金融大厦.xlsx"
 
 # Prices = CSV.read(Price_File, DataFrame, header=false)[:, 1]
 # println(Prices[1:10])
 
-Prices = readdlm("../data/slow_Price.csv", ',', Float64)
+Prices = readdlm("D:/vscode codes/BSS_MPC_deterministic-main/data/slow_Price.csv", ',', Float64)
 Prices = vcat(Prices'...)
 
 swap_counts_data = load_hourly_data(Demand_File)
@@ -149,7 +149,7 @@ delta_soc_penalty_coeffi = 10
 F. surrogate settings
 =#
 # load params
-data = load("../GP_Model/gp_model_params.jld")
+data = load("D:/vscode codes/BSS_MPC_deterministic-main/GP_Model/gp_model_params.jld")
 
 θ_csp_avg = data["θ_csp_avg"]
 θ_csn_avg = data["θ_csn_avg"]
@@ -166,7 +166,7 @@ input_stds = data["input_stds"]
 
 
 # load data
-df = CSV.read("../GP_Model/battery_data.csv", DataFrame)
+df = CSV.read("D:/vscode codes/BSS_MPC_deterministic-main/GP_Model/battery_data.csv", DataFrame)
 x = Matrix(df[:, [:x_next1, :x_next2, :x_next3, :x_next4, :u]])
 y = Matrix(df[:, [:x1, :x2, :x3, :x4]])
 total_data_length = size(x, 1)

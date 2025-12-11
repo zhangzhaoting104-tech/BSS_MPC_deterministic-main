@@ -3,7 +3,8 @@ using PyPlot
 using Interpolations
 using Distributions
 using JuMP
-using Ipopt, KNITRO
+using Ipopt
+#using KNITRO
 using JLD
 include("setup.jl")
 
@@ -204,23 +205,24 @@ function OptimalControl(u0, t_start, soc_min, soc_max)
                        sum(buy_from_grid[h] * grid_price[nHours_start+h] for h = 1:nHours_Horizon) +
                        ((expectedrevenue / (1 - soc_retire)) * (cf[Nt] - cf0)) / Qmax)
 
-    status = optimize!(m)
+    status = JuMP.optimize!(m)
 
 
     println("FR_price:  ", FR_price[nHours_start+1])
-    println("FR_band:  ", value.(FR_band[1]))
-    println("buy_from_grid:  ", value.(buy_from_grid[1]))
+    println("FR_band:  ", JuMP.value(FR_band[1]))
+    println("buy_from_grid:  ", JuMP.value(buy_from_grid[1]))
 
 
-    println("revenue   ", FR_price[nHours_start+1] * value.(FR_band[1]))
-    println("cost      ", value.(buy_from_grid) * grid_price[nHours_start+1])
-    println("penalty   ", expectedrevenue / (1 - soc_retire) * (value.(cf[Nt]) - cf0) / Qmax)
+    println("revenue   ", FR_price[nHours_start+1] * JuMP.value(FR_band[1]))
+    println("cost      ", JuMP.value(buy_from_grid) * grid_price[nHours_start+1])
+    println("penalty   ", expectedrevenue / (1 - soc_retire) * (JuMP.value(cf[Nt]) - cf0) / Qmax)
 
-    println("capacity fade:  ", (value.(cf[Nt]) - cf0) / Qmax)
+    println("capacity fade:  ", (JuMP.value(cf[Nt]) - cf0) / Qmax)
 
-    FR_band = value.(FR_band)[1]
-    grid_band = value.(buy_from_grid)[1]
-    waste = value.(waste)[1:Nt_FR_hour+1]
+    FR_band = JuMP.value(FR_band[1])
+    grid_band = JuMP.value(buy_from_grid[1])
+    waste_values = [JuMP.value(waste[i]) for i in 1:min(Nt_FR_hour+1, length(waste))]
+    waste = waste_values  # 覆盖原来的变量对象
     if status != :Optimal
         FR_band = 3 * P_nominal
         power_next = P_nominal * soc0 + FR_band * mean(signal[Nt_FR_start+1:Nt_FR_start+Nt_FR_Horizon])
