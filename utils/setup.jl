@@ -55,7 +55,7 @@ Urefs = 0.4
 Rsei = 0.01
 
 
-area = 1  #0.3108
+area = 0.3108
 cspmax = 10350
 csnmax = 29480
 lp = 6.521e-5
@@ -144,7 +144,13 @@ soc_shortage_discount_coeffi = 1000
 # soc change penalty
 delta_soc_penalty_coeffi = 10
 
+# # === 在 setup.jl 的 E 部分添加或修改以下参数 ===
+# w1 = 1e2  # 电池退化惩罚权重 (对应 PDF 中的 w1) 
+# w2 = 1e1  # 使用均衡惩罚权重 (对应 PDF 中的 w2) 
+# PI_Degradation = 5000.0  # 电池退化惩罚因子 (对应 PDF 中的 Pi) [cite: 108]
 
+# 确保其他物理量与PDF一致
+# V_max, V_min 等已定义 [cite: 50, 134]
 #=
 F. surrogate settings
 =#

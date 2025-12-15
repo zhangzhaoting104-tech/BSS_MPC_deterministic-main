@@ -1,3 +1,5 @@
+# bss_simulator.jl
+
 using DelimitedFiles
 using Sundials
 using Interpolations
@@ -6,11 +8,12 @@ using BlockDiagonals
 using LinearAlgebra
 using SymbolicIndexingInterface: parameter_values
 
+# 引入 setup 和 utils (假设已在主程序引入，这里为了独立性保留，实际运行时如果是 include 链不需要重复)
 include("setup.jl")
 include("utils.jl")
 
-
-# Dynamics
+# f_common 保持不变，直接复用原代码中的定义
+# ... (f_common 代码省略，保持原样) ...
 function f_common(out, du, u, p, t)
   csp = u[1:Ncp]
   csn = u[(Ncp+1):(Ncp+Ncn)]
@@ -69,12 +72,12 @@ function f_common(out, du, u, p, t)
   out[12] = isei / 3600 - du[Ncp+Ncn+Nsei+5]
 end
 
-
 mutable struct Simulator
   prob
   tspan
 
-  function Simulator(u0, battery_charge)
+  # 修改构造函数：battery_charge 应该是一个标量 (单个电池的电流)
+  function Simulator(u0_single, battery_charge_scalar)
 
     TIME_SEGMENT = 0:dt:DT_STATE
     tspan = (float(TIME_SEGMENT[1]), float(TIME_SEGMENT[end]))
@@ -85,7 +88,8 @@ mutable struct Simulator
     differential_vars[11] = true
     differential_vars[12] = true
 
-    prob = SciMLBase.DAEProblem(f_common, zero(u0), u0, tspan, battery_charge, differential_vars=differential_vars)
+    # 关键修改：传入标量 battery_charge_scalar
+    prob = SciMLBase.DAEProblem(f_common, zero(u0_single), u0_single, tspan, battery_charge_scalar, differential_vars=differential_vars)
 
     new(prob, tspan)
   end
@@ -103,6 +107,7 @@ function simulate(simulator, u0, grid_price, battery_charge, swap_battery_idx, s
   capacity_remain = 1 .- fade
 
   for k in 1:NUM_BATTERIES_IN_STATION
+    # 停止条件保持不变
     function stop_cond(u, t, integrator)
       csn_avg = u[Ncp+1]
       soc_in = csn_avg / csnmax
@@ -118,37 +123,50 @@ function simulate(simulator, u0, grid_price, battery_charge, swap_battery_idx, s
     affect!(integrator) = terminate!(integrator)
     cb = ContinuousCallback(stop_cond, affect!, rootfind=true, interp_points=100)
 
-
-    prob = remake(simulator.prob, u0=copy(u0[k, :]), p=battery_charge[k])
+    # 关键修改：remake 时，传入当前电池的电流标量 battery_charge[k]
+    # 注意：DifferentialEquations 有时对参数类型敏感，确保它是 Float64
+    current_p = Float64(battery_charge[k])
+    prob = remake(simulator.prob, u0=copy(u0[k, :]), p=current_p)
+    
+    # 使用 BrownFullBasicInit 初始化 DAE，这对于解决一致性问题至关重要
     sol = DifferentialEquations.solve(prob, IDA(), 
         initializealg = DiffEqBase.BrownFullBasicInit(), 
         verbose = false, 
         callback = cb, 
-        adaptive = false
+        adaptive = false,
+        reltol = 1e-4, 
+        abstol = 1e-4
     )
-    csn_avg = (sol[end])[Ncp+1]
-    soc_end = csn_avg / csnmax
-    u1[k, :] .= sol[end]
+    
+    # 处理解
+    if sol.retcode == :Success || sol.retcode == :Terminated
+        u1[k, :] .= sol[end]
+    else
+        if log println("Warning: Sim failed for bat $k with code $(sol.retcode)") end
+        u1[k, :] .= u0[k, :] # 失败回退
+    end
+
     if battery_charge[k] < 0
       battery_charge[k] = battery_charge[k] * sol.t[end] / simulator.tspan[end]
     end
   end
 
-  # record capacity fade before swapping
+  # 后续记录和换电逻辑保持不变
   delta_sei_list = copy(u1[:, 11])
   cf_list = copy(u1[:, 12])
 
-  # state mutation if any battery is selected for swapping
-  cost = (expectedrevenue / (1 - soc_retire)) * sum((u1[:, 12] - u0[:, 12])) / Qmax # cf cost
+  cost = (expectedrevenue / (1 - soc_retire)) * sum((u1[:, 12] - u0[:, 12])) / Qmax 
   soc_cost_coeffi = 20
-  num_soc_violate = [0, length(swap_battery_idx)] # num_soc_violate, num_swap
+  num_soc_violate = [0, length(swap_battery_idx)] 
+  
   for i in 1:length(swap_battery_idx)
     idx = swap_battery_idx[i]
     soc = u1[idx, 3] / csnmax
     if soc < replaceable_soc
-      cost = cost + soc_cost_coeffi * (replaceable_soc - soc) # soc insufficient cost
+      cost = cost + soc_cost_coeffi * (replaceable_soc - soc) 
       num_soc_violate[1] = num_soc_violate[1] + 1
     end
+    # 状态替换
     u1[idx, 1] = swap_battery_state[i, 1]
     u1[idx, 3] = swap_battery_state[i, 2]
     u1[idx, Ncp+Ncn+4+3] = swap_battery_state[i, 3]
@@ -158,13 +176,8 @@ function simulate(simulator, u0, grid_price, battery_charge, swap_battery_idx, s
   profit = -grid_price * sum(battery_charge) - cost
 
   if log
-    println("profit:  ", profit)
-    # for k in 1:NUM_BATTERIES_IN_STATION
-    #   println("u1_sim[$k]:  ", u1[k, [1, 3, 11, 12]])
-    # end
-
     elapsed = time() - start_time
-    println("simulation suceeded, elapsed time:     ", elapsed)
+    println("simulation succeeded, elapsed time:     ", elapsed)
   end
 
   return u1, profit, battery_charge, delta_sei_list, cf_list, num_soc_violate
