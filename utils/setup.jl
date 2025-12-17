@@ -55,7 +55,7 @@ Urefs = 0.4
 Rsei = 0.01
 
 
-area = 0.3108
+area = 1#0.3108
 cspmax = 10350
 csnmax = 29480
 lp = 6.521e-5

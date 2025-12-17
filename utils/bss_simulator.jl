@@ -15,10 +15,12 @@ include("utils.jl")
 # f_common 保持不变，直接复用原代码中的定义
 # ... (f_common 代码省略，保持原样) ...
 function f_common(out, du, u, p, t)
+    
+
   csp = u[1:Ncp]
   csn = u[(Ncp+1):(Ncp+Ncn)]
-  csp = max.(1, min.(csp, cspmax - 1))
-  csn = max.(1, min.(csn, csnmax - 1))
+  # csp = max.(1, min.(csp, cspmax - 1))
+  # csn = max.(1, min.(csn, csnmax - 1))
   csp_avg = csp[1]
   csp_s = csp[2]
   csn_avg = csn[1]
@@ -48,7 +50,12 @@ function f_common(out, du, u, p, t)
        1.47266 * exp(-1.14872 * theta_n + 2.13185) -
        9.9989 * tanh(0.60345 * theta_n - 1.58171)
   jn = 2 * kn * ce^(0.5) * (csnmax - csn_s)^(0.5) * csn_s^(0.5) * sinh(0.5 * F / R / T * (phi_n - Un + (Rsei + delta_sei / Kappa_sei) * it / an / lnn))
+    # f_common 开头
+csp_s = clamp(csp_s, 1e-6, cspmax - 1e-6)
+csn_s = clamp(csn_s, 1e-6, csnmax - 1e-6)
 
+theta_p = clamp(csp_s / cspmax, 1e-6, 1 - 1e-6)
+theta_n = clamp(csn_s / csnmax, 1e-6, 1 - 1e-6)
   #C1. Governing Equations
   #Positive electrode
   out[1] = -3 * jp / Rpp - du[1]
@@ -70,6 +77,8 @@ function f_common(out, du, u, p, t)
 
   #C4. Charge stored
   out[12] = isei / 3600 - du[Ncp+Ncn+Nsei+5]
+  @assert isfinite(theta_p) && theta_p > 0 "theta_p invalid"
+    @assert isfinite(theta_n) && theta_n > 0 "theta_n invalid"
 end
 
 mutable struct Simulator
@@ -89,96 +98,169 @@ mutable struct Simulator
     differential_vars[12] = true
 
     # 关键修改：传入标量 battery_charge_scalar
-    prob = SciMLBase.DAEProblem(f_common, zero(u0_single), u0_single, tspan, battery_charge_scalar, differential_vars=differential_vars)
+    # prob = SciMLBase.DAEProblem(f_common, zero(u0_single), u0_single, tspan, battery_charge_scalar, differential_vars=differential_vars)
+    du0 = zeros(length(u0_single))
+    du0[1] = 0.0          # csp_avg
+    du0[Ncp+1] = 0.0     # csn_avg
+    du0[Ncp+Ncn+4+3] = 0.0  # delta_sei
+    du0[Ncp+Ncn+Nsei+5] = 0.0 # cf
+
+    prob = DAEProblem(
+      f_common,
+      du0,
+      u0_single,
+      tspan,
+      battery_charge_scalar;
+      differential_vars = differential_vars
+)
 
     new(prob, tspan)
   end
 end
 
 
-function simulate(simulator, u0, grid_price, battery_charge, swap_battery_idx, swap_battery_state; log::Bool=false)
+# function simulate(simulator, u0, grid_price, battery_charge, swap_battery_idx, swap_battery_state; log::Bool=false)
+function simulate(
+    simulator::Simulator,
+    init_solver::InitialStateSolver,
+    u0::Matrix,
+    grid_price::Float64,
+    battery_charge::Vector,
+    swap_battery_idx::Vector,
+    swap_battery_state::Matrix;
+    log::Bool = false
+)
+    swap_set = Set(swap_battery_idx)
+    start_time = time()
 
-  start_time = time()
+    u1 = zero(u0)
 
-  u1 = zero(u0)
+    cf0 = u0[:, Ncp+Ncn+Nsei+5]
+    fade = cf0 ./ Qmax
+    capacity_remain = 1 .- fade
 
-  cf0 = u0[:, Ncp+Ncn+Nsei+5]
-  fade = cf0 ./ Qmax
-  capacity_remain = 1 .- fade
+    for k in 1:NUM_BATTERIES_IN_STATION
 
-  for k in 1:NUM_BATTERIES_IN_STATION
-    # 停止条件保持不变
-    function stop_cond(u, t, integrator)
-      csn_avg = u[Ncp+1]
-      soc_in = csn_avg / csnmax
-      min_stop = capacity_remain[k] * soc_min_stop
-      max_stop = capacity_remain[k] * soc_max_stop
+        # ================================
+        # 0️⃣ 默认：什么都不做
+        # ================================
+        u1[k, :] = u0[k, :]
 
-      if soc_in >= (min_stop + max_stop) / 2
-        return max_stop - soc_in
-      else
-        return soc_in - min_stop
-      end
+        # ================================
+        # 1️⃣ 换电电池：只做准静态
+        # ================================
+        if k in swap_set
+            u1[k, :] .= safe_initial_state(
+                init_solver,
+                u0[k, :],
+                battery_charge[k]
+            )
+            continue
+        end
+
+        # ================================
+        # 2️⃣ 非换电电池：DAE
+        # ================================
+        u0_consistent = safe_initial_state(
+            init_solver,
+            u0[k, :],
+            battery_charge[k]
+        )
+
+        function stop_cond(u, t, integrator)
+            csn_avg = u[Ncp+1]
+            soc_in = csn_avg / csnmax
+            min_stop = capacity_remain[k] * soc_min_stop
+            max_stop = capacity_remain[k] * soc_max_stop
+
+            if soc_in >= (min_stop + max_stop) / 2
+                return max_stop - soc_in
+            else
+                return soc_in - min_stop
+            end
+        end
+
+        affect!(integrator) = terminate!(integrator)
+        cb = ContinuousCallback(stop_cond, affect!; rootfind = true)
+
+        prob = remake(
+            simulator.prob,
+            u0 = copy(u0_consistent),
+            p  = Float64(battery_charge[k])
+        )
+
+        sol = solve(
+            prob,
+            IDA();
+            initializealg = DiffEqBase.BrownFullBasicInit(),
+            reltol = 1e-4,
+            abstol = 1e-4,
+            adaptive = false,
+            callback = cb,
+            verbose = false
+        )
+
+        # ================================
+        # 3️⃣ DAE 成功 / 失败处理
+        # ================================
+        if sol.retcode == :Success || sol.retcode == :Terminated
+            u1[k, :] = sol.u[end]
+        else
+            # fallback：准静态
+            u_proj, flag = quasi_static_project(
+                init_solver,
+                u0_consistent,
+                Float64(battery_charge[k])
+            )
+
+            if flag == :success
+                u1[k, :] = u_proj
+            else
+                u1[k, :] = compute_initial_state(init_solver, u0[k, :], 0.0)
+            end
+        end
+
+        # ================================
+        # 4️⃣ 功率修正（保留你原逻辑）
+        # ================================
+        if battery_charge[k] < 0 && sol.retcode == :Success
+            battery_charge[k] *= sol.t[end] / simulator.tspan[end]
+        end
     end
-    affect!(integrator) = terminate!(integrator)
-    cb = ContinuousCallback(stop_cond, affect!, rootfind=true, interp_points=100)
 
-    # 关键修改：remake 时，传入当前电池的电流标量 battery_charge[k]
-    # 注意：DifferentialEquations 有时对参数类型敏感，确保它是 Float64
-    current_p = Float64(battery_charge[k])
-    prob = remake(simulator.prob, u0=copy(u0[k, :]), p=current_p)
-    
-    # 使用 BrownFullBasicInit 初始化 DAE，这对于解决一致性问题至关重要
-    sol = DifferentialEquations.solve(prob, IDA(), 
-        initializealg = DiffEqBase.BrownFullBasicInit(), 
-        verbose = false, 
-        callback = cb, 
-        adaptive = false,
-        reltol = 1e-4, 
-        abstol = 1e-4
-    )
-    
-    # 处理解
-    if sol.retcode == :Success || sol.retcode == :Terminated
-        u1[k, :] .= sol[end]
-    else
-        if log println("Warning: Sim failed for bat $k with code $(sol.retcode)") end
-        u1[k, :] .= u0[k, :] # 失败回退
+    # ================================
+    # 后处理（你原来的逻辑）
+    # ================================
+    delta_sei_list = copy(u1[:, 11])
+    cf_list = copy(u1[:, 12])
+
+    cost = (expectedrevenue / (1 - soc_retire)) *
+           sum((u1[:, 12] - u0[:, 12])) / Qmax
+
+    soc_cost_coeffi = 20
+    num_soc_violate = [0, length(swap_battery_idx)]
+
+    for i in 1:length(swap_battery_idx)
+        idx = swap_battery_idx[i]
+        soc = u1[idx, 3] / csnmax
+        if soc < replaceable_soc
+            cost += soc_cost_coeffi * (replaceable_soc - soc)
+            num_soc_violate[1] += 1
+        end
+
+        # 状态替换
+        u1[idx, 1] = swap_battery_state[i, 1]
+        u1[idx, 3] = swap_battery_state[i, 2]
+        u1[idx, Ncp+Ncn+4+3] = swap_battery_state[i, 3]
+        u1[idx, Ncp+Ncn+Nsei+5] = swap_battery_state[i, 4]
     end
 
-    if battery_charge[k] < 0
-      battery_charge[k] = battery_charge[k] * sol.t[end] / simulator.tspan[end]
+    profit = -grid_price * sum(battery_charge) - cost
+
+    if log
+        println("simulation succeeded, elapsed time: ", time() - start_time)
     end
-  end
 
-  # 后续记录和换电逻辑保持不变
-  delta_sei_list = copy(u1[:, 11])
-  cf_list = copy(u1[:, 12])
-
-  cost = (expectedrevenue / (1 - soc_retire)) * sum((u1[:, 12] - u0[:, 12])) / Qmax 
-  soc_cost_coeffi = 20
-  num_soc_violate = [0, length(swap_battery_idx)] 
-  
-  for i in 1:length(swap_battery_idx)
-    idx = swap_battery_idx[i]
-    soc = u1[idx, 3] / csnmax
-    if soc < replaceable_soc
-      cost = cost + soc_cost_coeffi * (replaceable_soc - soc) 
-      num_soc_violate[1] = num_soc_violate[1] + 1
-    end
-    # 状态替换
-    u1[idx, 1] = swap_battery_state[i, 1]
-    u1[idx, 3] = swap_battery_state[i, 2]
-    u1[idx, Ncp+Ncn+4+3] = swap_battery_state[i, 3]
-    u1[idx, Ncp+Ncn+Nsei+5] = swap_battery_state[i, 4]
-  end
-
-  profit = -grid_price * sum(battery_charge) - cost
-
-  if log
-    elapsed = time() - start_time
-    println("simulation succeeded, elapsed time:     ", elapsed)
-  end
-
-  return u1, profit, battery_charge, delta_sei_list, cf_list, num_soc_violate
+    return u1, profit, battery_charge, delta_sei_list, cf_list, num_soc_violate
 end
+#kexingbanben.jl
