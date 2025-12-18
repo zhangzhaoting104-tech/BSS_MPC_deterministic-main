@@ -243,6 +243,11 @@ function compute_initial_state(solver::InitialStateSolver, u0, power)
         u0[Ncp+Ncn+5] = I_est 
         u0[Ncp+Ncn+6] = 0.0   
     end
+    
+    # 强制小电流回退
+    if abs(u0[Ncp+Ncn+5]) > 1e3 || !isfinite(u0[Ncp+Ncn+5])
+        return compute_initial_state(init_solver, u0, 0.0)
+    end
 
     return u0
 end

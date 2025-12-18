@@ -51,11 +51,11 @@ function f_common(out, du, u, p, t)
        9.9989 * tanh(0.60345 * theta_n - 1.58171)
   jn = 2 * kn * ce^(0.5) * (csnmax - csn_s)^(0.5) * csn_s^(0.5) * sinh(0.5 * F / R / T * (phi_n - Un + (Rsei + delta_sei / Kappa_sei) * it / an / lnn))
     # f_common 开头
-csp_s = clamp(csp_s, 1e-6, cspmax - 1e-6)
-csn_s = clamp(csn_s, 1e-6, csnmax - 1e-6)
+# csp_s = clamp(csp_s, 1e-6, cspmax - 1e-6)
+# csn_s = clamp(csn_s, 1e-6, csnmax - 1e-6)
 
-theta_p = clamp(csp_s / cspmax, 1e-6, 1 - 1e-6)
-theta_n = clamp(csn_s / csnmax, 1e-6, 1 - 1e-6)
+# theta_p = clamp(csp_s / cspmax, 1e-6, 1 - 1e-6)
+# theta_n = clamp(csn_s / csnmax, 1e-6, 1 - 1e-6)
   #C1. Governing Equations
   #Positive electrode
   out[1] = -3 * jp / Rpp - du[1]
@@ -133,6 +133,7 @@ function simulate(
     swap_set = Set(swap_battery_idx)
     start_time = time()
 
+    
     u1 = zero(u0)
 
     cf0 = u0[:, Ncp+Ncn+Nsei+5]

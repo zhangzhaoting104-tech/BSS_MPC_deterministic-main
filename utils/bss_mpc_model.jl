@@ -8,7 +8,7 @@ function build_mpc_model(u0_current, horizon_steps, price_forecast, demand_forec
     dt = DT_STATE 
     
     model = Model(optimizer_with_attributes(Ipopt.Optimizer, 
-        "print_level" => 5, 
+        "print_level" => 0, 
         "max_cpu_time" => 100.0,
         "tol" => 1e-4, 
         "nlp_scaling_method" => "gradient-based", # 自动缩放梯度 [cite: 41]
@@ -22,8 +22,20 @@ function build_mpc_model(u0_current, horizon_steps, price_forecast, demand_forec
     @variable(model, 1e-9 <= delta_sei[1:K, 1:horizon_steps+1] <= 1e-3)
     
     # 辅助变量
-    @variable(model, 0.005 <= theta_p[1:K, 1:horizon_steps] <= 0.995) 
-    @variable(model, 0.005 <= theta_n[1:K, 1:horizon_steps] <= 0.995)
+    # @variable(model, 0.005 <= theta_p[1:K, 1:horizon_steps] <= 0.995) 
+    # @variable(model, 0.005 <= theta_n[1:K, 1:horizon_steps] <= 0.995)
+    # 1. 缩减 theta 的允许范围，为仿真留出波动余量 [cite: 106]
+@variable(model, 0.05 <= theta_p[1:K, 1:horizon_steps] <= 0.95) 
+@variable(model, 0.05 <= theta_n[1:K, 1:horizon_steps] <= 0.95)
+
+# 2. 增加基于 SOC 的功率限制 (预防性降额) [cite: 81]
+for t in 1:horizon_steps, k in 1:K
+    soc = csn_avg[k,t] / csnmax
+
+    @constraint(model, power[k,t] <= P_nominal * (1.0 - soc))
+    @constraint(model, power[k,t] >= -P_nominal * soc)
+end
+
     @variable(model, 1.5 <= phi_p[1:K, 1:horizon_steps] <= 5.5)
     @variable(model, 0.0 <= phi_n[1:K, 1:horizon_steps] <= 3.5)
     @variable(model, -250 <= it[1:K, 1:horizon_steps] <= 250)

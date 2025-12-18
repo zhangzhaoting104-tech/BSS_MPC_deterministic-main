@@ -14,7 +14,7 @@ include("bss_mpc_model.jl")
 
 # --- 配置参数 ---
 SIM_DAYS = 1
-TOTAL_HOURS = 5 * SIM_DAYS # 模拟总时长
+TOTAL_HOURS = 12 * SIM_DAYS # 模拟总时长
 HORIZON_H = 24              # 预测视界 (小时)
 DT_SIM = 3600.0            # 模拟步长 (单位：秒）
 
@@ -43,6 +43,14 @@ function run_rolling_mpc()
         optimal_p = zeros(NUM_BATTERIES_IN_STATION)
         if termination_status(mpc_model) in [MOI.OPTIMAL, MOI.LOCALLY_SOLVED]
             optimal_p = value.(power_var[:, 1])
+        end
+
+        optimal_p = clamp.(optimal_p, -P_max, P_max)
+        for k in 1:NUM_BATTERIES_IN_STATION
+            soc = u0_current[k,3] / csnmax
+            if soc < 0.25 || soc > 0.85
+                optimal_p[k] = 0.0
+             end
         end
 
         # 4. 执行物理模拟 [cite: 8]
