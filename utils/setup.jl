@@ -22,6 +22,23 @@ Prices = vcat(Prices'...)
 
 swap_counts_data = load_hourly_data(Demand_File)
 swap_counts_data = vcat(swap_counts_data, swap_counts_data)
+# === setup.jl 修改部分 ===
+
+# 假设原始数据是 24 小时的
+# 为了支持 SIM_DAYS 的模拟且始终保持 24 小时 look-ahead
+# 总共需要的数据长度 = TOTAL_HOURS + HORIZON_H
+
+# 处理电价数据
+# Prices = readdlm("D:/vscode codes/BSS_MPC_deterministic-main/data/slow_Price.csv", ',', Float64)
+# Prices = vcat(Prices'...)
+# # 使用 repeat 函数循环平铺数据，确保长度足够
+# Prices = repeat(Prices, ceil(Int, (TOTAL_HOURS + HORIZON_H) / length(Prices)) + 1)
+
+# # 处理换电需求数据
+# swap_counts_data = load_hourly_data(Demand_File)
+# # 同样进行循环平铺
+# swap_counts_data = repeat(swap_counts_data, ceil(Int, (TOTAL_HOURS + HORIZON_H) / length(swap_counts_data)) + 1)
+
 swap_counts_cycle = 1 * 60 * 60 # counts swap number every 1 hour
 # println(size(swap_counts_data))
 # println(swap_counts_data[1:30])
@@ -107,7 +124,7 @@ D. battery statistics
 =#
 # number of battery
 NUM_BATTERIES_IN_AREA = 200
-NUM_BATTERIES_IN_STATION = 21
+NUM_BATTERIES_IN_STATION = 50
 # capacity list
 cf_list = zeros(NUM_BATTERIES_IN_AREA) # recording battery's capacity fade, initial value is 0
 

@@ -5,8 +5,8 @@ using JuMP
 using Ipopt
 using JLD
 
-# 引入 setup.jl 中的参数 (确保在主程序中已 include setup.jl)
-# include("setup.jl") 
+# 引入 setup.jl 中的参数
+include("setup.jl") 
 
 function sanitize_state!(u)
     # 物理量限幅，防止数值越界
@@ -198,7 +198,12 @@ function compute_initial_state(solver::InitialStateSolver, u0, power)
     reset_solver!(solver, u0, power)
     optimize!(solver.m)
     status = termination_status(solver.m)
-    
+    if status ∉ [MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.ALMOST_LOCALLY_SOLVED]
+        # 尝试半功率重试
+        reset_solver!(solver, u0, power * 0.5)
+        optimize!(solver.m)
+        status = termination_status(solver.m)
+    end
     # 检查求解状态
     if status in [MOI.OPTIMAL, MOI.LOCALLY_SOLVED, MOI.ALMOST_LOCALLY_SOLVED]
         csp_s0 = value(solver.csp_s)
@@ -218,6 +223,8 @@ function compute_initial_state(solver::InitialStateSolver, u0, power)
         u0[Ncp+Ncn+4] = pot0
         u0[Ncp+Ncn+5] = it0
         u0[Ncp+Ncn+6] = isei0
+
+        return u0
     else
         # --- 策略 C: 求解失败的回退机制 ---
         # 如果还是失败，说明 Power 需求超过了电池物理极限（如电压已到截止电压但仍需放电）
@@ -242,6 +249,8 @@ function compute_initial_state(solver::InitialStateSolver, u0, power)
         u0[Ncp+Ncn+4] = Up_val - Un_val 
         u0[Ncp+Ncn+5] = I_est 
         u0[Ncp+Ncn+6] = 0.0   
+        
+        return compute_initial_state(solver, u0, 0.0)
     end
     
     # 强制小电流回退
@@ -249,7 +258,7 @@ function compute_initial_state(solver::InitialStateSolver, u0, power)
         return compute_initial_state(init_solver, u0, 0.0)
     end
 
-    return u0
+   
 end
 
 function quasi_static_project(init_solver, u::AbstractVector, I::Float64; epsI::Float64 = 1e-6)
